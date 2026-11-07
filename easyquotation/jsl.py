@@ -9,6 +9,24 @@ from typing import Optional
 import requests
 
 
+def _parse_cookie(cookie: str) -> dict:
+    """把浏览器复制的 Cookie 字符串解析成 requests 用的 dict。
+
+    接受 "k=v; k2=v2" 这种原始格式，也接受已经是 dict 的情况。
+    """
+    if isinstance(cookie, dict):
+        return cookie
+    jar = {}
+    for part in (cookie or "").split(";"):
+        if "=" not in part:
+            continue
+        name, _, value = part.partition("=")
+        name = name.strip()
+        if name:
+            jar[name] = value.strip()
+    return jar
+
+
 class Jsl:
     """
     抓取集思路的数据
@@ -154,9 +172,12 @@ class Jsl:
         :param min_volume:最小交易量，单位万元
         """
         # 添加当前的ctime
-        self.__qdii_url = self.__qdii_url.format(ctime=int(time.time()))
+        # 上游写的是 self.__qdii_url = self.__qdii_url.format(...)，
+        # 第一次调用后实例属性已被替换成格式化过的 URL，第二次调用会因为
+        # URL 里没有 {ctime} 占位符而保留旧时间戳。改用局部变量。
+        qdii_url = self.__qdii_url.format(ctime=int(time.time()))
         # 请求数据
-        rep = requests.get(self.__qdii_url)
+        rep = requests.get(qdii_url, timeout=15)
         # 获取返回的json字符串
         fundjson = json.loads(rep.text)
         # 格式化返回的json字符串
@@ -177,13 +198,26 @@ class Jsl:
     def cb(self, min_volume=0, cookie: str=None):
         """以字典形式返回可转债数据
         :param min_volume:最小交易量，单位万元
-        :cookie: 登陆凭证，可以从浏览器获取的对应 Cookie
+        :param cookie: 登陆凭证，可以从浏览器获取的对应 Cookie
         """
         # 添加当前的ctime
-        self.__cb_url = self.__cb_url.format(ctime=int(time.time()))
+        cb_url = self.__cb_url.format(ctime=int(time.time()))
         # 请求数据
         session = requests.Session()
-        rep = session.get(self.__cb_url,headers=self._get_headers())
+        if cookie:
+            # 上游签名里有 cookie 形参却从未使用它，导致传了凭证也不生效。
+            session.cookies.update(_parse_cookie(cookie))
+        headers = self._get_headers()
+        headers["Referer"] = "https://www.jisilu.cn/data/cbnew/"
+        headers["X-Requested-With"] = "XMLHttpRequest"
+        rep = session.get(cb_url, headers=headers, timeout=15)
+        # 集思录未登录（或 Cookie 失效）时该接口返回 200 + 空 body，
+        # 直接 json.loads 会抛出难以定位的 JSONDecodeError。
+        if not rep.text.strip():
+            raise ValueError(
+                "集思录可转债接口返回空内容：该接口需要登录后的 Cookie，"
+                "请调用 cb(cookie='从浏览器复制的 Cookie')"
+            )
         # 获取返回的json字符串
         fundjson = json.loads(rep.text)
         # 格式化返回的json字符串

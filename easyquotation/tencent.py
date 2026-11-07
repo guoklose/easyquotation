@@ -65,8 +65,15 @@ class Tencent(basequotation.BaseQuotation):
                 "high": float(stock[33]),
                 "low": float(stock[34]),
                 "价格/成交量(手)/成交额": stock[35],
-                "成交量(手)": int(stock[36]) * 100,
-                "成交额(万)": float(stock[37]) * 10000,
+                # 腾讯原始字段：stock[36] 是「手」，stock[37] 是「万元」。
+                # 上游把两者分别乘以 100 / 10000 之后仍沿用「(手)」「(万)」的键名，
+                # 导致实际存的是股和元，键名与单位不符（实测：600519 手=42848、
+                # 成交额=619953万，与新浪 turnover=4284772股、成交额=6199528289元 互校）。
+                # 这里让键名与单位一致，并额外给出明确单位的键。
+                "成交量(手)": int(stock[36]),
+                "成交额(万)": float(stock[37]),
+                "成交量(股)": int(stock[36]) * 100,
+                "成交额(元)": float(stock[37]) * 10000,
                 "turnover": self._safe_float(stock[38]),
                 "PE": self._safe_float(stock[39]),
                 "unknown": stock[40],
