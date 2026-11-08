@@ -6,7 +6,9 @@
     quote.py snapshot [--source sina|tencent] [--limit N] [--prefix]
     quote.py hk 00700 00001
     quote.py kline 00700 [--days 350]
-    quote.py etf
+    quote.py etf [--rp 25] [--page 1] [--cookie ...]
+    quote.py qdii [--cookie ...]
+    quote.py cb --cookie ...
     quote.py fx [--currency usa|hkd|eur|jpy|...]
     quote.py codes [--realtime]
 
@@ -15,8 +17,15 @@
 import argparse
 import json
 import sys
+from typing import cast
 
 import easyquotation
+from easyquotation.jsl import Jsl
+
+
+def _jsl() -> Jsl:
+    """拿到 Jsl 实例（带类型，Pyright 才知道有 etfindex/qdii/cb）。"""
+    return cast(Jsl, easyquotation.use("jsl"))
 
 
 def _dumps(obj):
@@ -51,8 +60,32 @@ def cmd_kline(args):
 
 
 def cmd_etf(args):
-    q = easyquotation.use("jsl")
-    return q.etfindex()
+    q = _jsl()
+    if args.cookie:
+        q.set_cookie(args.cookie)
+    data = q.etfindex(
+        index_id=args.index_id or "",
+        min_volume=args.min_volume,
+        max_discount=args.max_discount,
+        min_discount=args.min_discount,
+        rp=args.rp,
+        page=args.page,
+    )
+    if args.limit:
+        data = dict(list(data.items())[: args.limit])
+    return data
+
+
+def cmd_qdii(args):
+    q = _jsl()
+    if args.cookie:
+        q.set_cookie(args.cookie)
+    return q.qdii(min_volume=args.min_volume)
+
+
+def cmd_cb(args):
+    q = _jsl()
+    return q.cb(min_volume=args.min_volume, cookie=args.cookie)
 
 
 def cmd_fx(args):
@@ -93,7 +126,25 @@ def main():
     k.set_defaults(func=cmd_kline)
 
     e = sub.add_parser("etf", help="集思路 ETF 列表")
+    e.add_argument("--index-id", default="", help="只取跟踪该指数的 ETF")
+    e.add_argument("--min-volume", type=float, default=0, help="最小成交量")
+    e.add_argument("--max-discount", default=None, help="最高溢价率，如 -0.4 或 -0.4%%")
+    e.add_argument("--min-discount", default=None, help="最低溢价率，如 -1.3 或 -1.3%%")
+    e.add_argument("--rp", type=int, default=25, help="每页条数（游客最多 20 条）")
+    e.add_argument("--page", type=int, default=1, help="页码")
+    e.add_argument("--limit", type=int, default=0, help="只输出前 N 条，0=全部")
+    e.add_argument("--cookie", default=None, help="集思路登录 Cookie（游客只能看到前 20 条）")
     e.set_defaults(func=cmd_etf)
+
+    d = sub.add_parser("qdii", help="集思路 QDII 基金列表")
+    d.add_argument("--min-volume", type=float, default=0, help="最小交易量（万元）")
+    d.add_argument("--cookie", default=None, help="集思路登录 Cookie")
+    d.set_defaults(func=cmd_qdii)
+
+    b = sub.add_parser("cb", help="集思路可转债列表（需要登录 Cookie）")
+    b.add_argument("--min-volume", type=float, default=0, help="最小交易量（万元）")
+    b.add_argument("--cookie", default=None, help="集思路登录 Cookie（必填）")
+    b.set_defaults(func=cmd_cb)
 
     f = sub.add_parser("fx", help="中国银行外汇牌价")
     f.add_argument(

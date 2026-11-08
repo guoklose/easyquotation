@@ -3,10 +3,21 @@
 import json
 import sys
 import traceback
+from typing import cast
 
 import easyquotation
+from easyquotation.boc import Boc
+from easyquotation.jsl import Jsl
 
 RESULTS = {}
+
+
+def _jsl() -> Jsl:
+    return cast(Jsl, easyquotation.use("jsl"))
+
+
+def _boc() -> Boc:
+    return cast(Boc, easyquotation.use("boc"))
 
 
 def check(name):
@@ -66,14 +77,40 @@ def _():
 
 @check("jsl.etfindex")
 def _():
-    q = easyquotation.use("jsl")
+    q = _jsl()
     return q.etfindex()
+
+
+@check("jsl.etfindex.paged")
+def _():
+    """分页参数应被真正拼进 URL（上游写死 rp=25&page=1，无法翻页）。"""
+    q = _jsl()
+    return q.etfindex(rp=50, page=3)
+
+
+@check("jsl.etfindex.discount_filter")
+def _():
+    """折溢价过滤在字段为 "-" 时不应抛 ValueError。"""
+    q = _jsl()
+    return q.etfindex(max_discount="-0.4", min_discount="-1.3%")
+
+
+@check("jsl.qdii")
+def _():
+    q = _jsl()
+    return q.qdii()
 
 
 @check("boc.get_exchange_rate")
 def _():
-    q = easyquotation.use("boc")
+    q = _boc()
     return q.get_exchange_rate()
+
+
+@check("boc.get_exchange_rate.hkd")
+def _():
+    q = _boc()
+    return q.get_exchange_rate("hkd")
 
 
 @check("helpers.get_stock_codes")

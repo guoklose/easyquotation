@@ -9,6 +9,47 @@ from typing import Optional
 import requests
 
 
+def _pct(value):
+    """把集思路返回的折溢价字段转成 float 或 None（"-" 表示不适用）。"""
+    if value is None:
+        return None
+    text = str(value).strip()
+    if text in ("", "-"):
+        return None
+    return float(text.strip("%")) / 100.0
+
+
+def _pct_ge(value, threshold):
+    """折溢价是否 >= threshold（"-" 视为不适用，排除）。"""
+    pct = _pct(value)
+    return pct is not None and pct >= threshold
+
+
+def _pct_le(value, threshold):
+    """折溢价是否 <= threshold（"-" 视为不适用，排除）。"""
+    pct = _pct(value)
+    return pct is not None and pct <= threshold
+
+
+def _num(value):
+    """把集思路的数值字段转成 float，缺失或 "-" 返回 None。"""
+    if value is None:
+        return None
+    text = str(value).strip().replace(",", "")
+    if text in ("", "-"):
+        return None
+    try:
+        return float(text)
+    except ValueError:
+        return None
+
+
+def _num_ge(value, threshold):
+    """数值是否 >= threshold（缺失或 "-" 视为不满足）。"""
+    num = _num(value)
+    return num is not None and num >= threshold
+
+
 def _parse_cookie(cookie: str) -> dict:
     """把浏览器复制的 Cookie 字符串解析成 requests 用的 dict。
 
@@ -35,9 +76,9 @@ class Jsl:
     # 集思录登录接口
     __jsl_login_url = "https://www.jisilu.cn/account/ajax/login_process/"
 
-    # 集思录 ETF 接口
+    # 集思路 ETF 接口
     # pylint: disable=line-too-long
-    __etf_index_url = "https://www.jisilu.cn/data/etf/etf_list/?___jsl=LST___t={ctime:d}&rp=25&page=1"
+    __etf_index_url = "https://www.jisilu.cn/data/etf/etf_list/?___jsl=LST___t={ctime:d}&rp={rp:d}&page={page:d}"
 
     # 黄金 ETF , 货币 ETF 留坑,未完成
     __etf_gold_url = (
@@ -100,24 +141,48 @@ class Jsl:
         :param per:
         :return:
         """
-        return float(per.strip("%")) / 100.
+        if per is None:
+            return None
+        text = str(per).strip()
+        if text in ("", "-"):
+            # 集思路对不适用折溢价的品种返回 "-"，上游直接 float() 会抛 ValueError
+            return None
+        return float(text.strip("%")) / 100.
 
 
     def etfindex(
-        self, index_id="", min_volume=0, max_discount=None, min_discount=None
+        self,
+        index_id="",
+        min_volume=0,
+        max_discount=None,
+        min_discount=None,
+        rp=25,
+        page=1,
     ):
         """
         以字典形式返回 指数ETF 数据
         :param index_id: 获取指定的指数
         :param min_volume: 最小成交量
-        :param min_discount: 最低溢价率, 适用于溢价套利, 格式 "-1.2%", "-1.2", -0.012 三种均可
         :param max_discount: 最高溢价率, 适用于折价套利, 格式 "-1.2%", "-1.2", -0.012 三种均可
+        :param min_discount: 最低溢价率, 适用于溢价套利, 格式 "-1.2%", "-1.2", -0.012 三种均可
+        :param rp: 每页条数
+        :param page: 页码
         :return: {"fund_id":{}}
         """
         # 添加当前的ctime
-        etf_index_url = self.__etf_index_url.format(ctime=int(time.time()))
+        etf_index_url = self.__etf_index_url.format(
+            ctime=int(time.time()), rp=rp, page=page
+        )
         # 请求数据
-        etf_json = requests.get(etf_index_url).json()
+        # 上游用裸 requests.get，既不带 Cookie 也不带 UA：
+        # 游客调用时集思录只返回前 20 条（共 1451 条），且折溢价字段全是 "-"。
+        # 这里改用带 Cookie / UA 的 session，登录后即可取到完整列表与折溢价。
+        session = requests.Session()
+        headers = self._get_headers()
+        headers["Referer"] = "https://www.jisilu.cn/data/etf/"
+        headers["X-Requested-With"] = "XMLHttpRequest"
+        rep = session.get(etf_index_url, headers=headers, timeout=15)
+        etf_json = rep.json()
 
         # 格式化返回的json字符串
         data = self.formatetfindexjson(etf_json)
@@ -135,7 +200,7 @@ class Jsl:
             data = {
                 fund_id: cell
                 for fund_id, cell in data.items()
-                if float(cell["volume"]) >= min_volume
+                if _num_ge(cell.get("volume"), min_volume)
             }
         if min_discount is not None:
             # 指定最小溢价率
@@ -148,7 +213,7 @@ class Jsl:
             data = {
                 fund_id: cell
                 for fund_id, cell in data.items()
-                if self.percentage2float(cell["discount_rt"]) >= min_discount
+                if _pct_ge(cell["discount_rt"], min_discount)
             }
         if max_discount is not None:
             # 指定最大溢价率
@@ -161,7 +226,7 @@ class Jsl:
             data = {
                 fund_id: cell
                 for fund_id, cell in data.items()
-                if self.percentage2float(cell["discount_rt"]) <= max_discount
+                if _pct_le(cell["discount_rt"], max_discount)
             }
 
         self.__etfindex = data
@@ -188,7 +253,7 @@ class Jsl:
             data = {
                 k: data[k]
                 for k in data
-                if float(data[k]["volume"]) > min_volume
+                if _num_ge(data[k].get("volume"), min_volume)
             }
 
         self.__qdii = data
@@ -227,7 +292,7 @@ class Jsl:
             data = {
                 k: data[k]
                 for k in data
-                if float(data[k]["volume"]) > min_volume
+                if _num_ge(data[k].get("volume"), min_volume)
             }
 
         self.__cb = data
