@@ -7,7 +7,7 @@
     quote.py hk 00700 00001
     quote.py kline 00700 [--days 350]
     quote.py etf
-    quote.py fx
+    quote.py fx [--currency usa|hkd|eur|jpy|...]
     quote.py codes [--realtime]
 
 输出统一为 JSON（UTF-8, ensure_ascii=False）。
@@ -57,7 +57,7 @@ def cmd_etf(args):
 
 def cmd_fx(args):
     q = easyquotation.use("boc")
-    return q.get_exchange_rate()
+    return q.get_exchange_rate(args.currency)  # type: ignore[attr-defined]
 
 
 def cmd_codes(args):
@@ -96,6 +96,11 @@ def main():
     e.set_defaults(func=cmd_etf)
 
     f = sub.add_parser("fx", help="中国银行外汇牌价")
+    f.add_argument(
+        "--currency",
+        default="usa",
+        help="币种代码，如 usa/hkd/eur/jpy/gbp/aud/cad/chf/sgd/nzd/krw；也接受中文名",
+    )
     f.set_defaults(func=cmd_fx)
 
     c = sub.add_parser("codes", help="股票代码表")
